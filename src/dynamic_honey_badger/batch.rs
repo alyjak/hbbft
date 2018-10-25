@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{ChangeState, JoinPlan};
+use super::{ChangeState, Epoch, JoinPlan};
 use {NetworkInfo, NodeIdT};
 
 /// A batch of transactions the algorithm has output.
@@ -9,6 +9,8 @@ use {NetworkInfo, NodeIdT};
 pub struct Batch<C, N> {
     /// The sequence number: there is exactly one batch in each epoch.
     pub(super) epoch: u64,
+    /// The next `DynamicHoneyBadger` epoch.
+    pub(super) next_epoch: Epoch,
     /// The user contributions committed in this epoch.
     pub(super) contributions: BTreeMap<N, C>,
     /// The current state of adding or removing a node: whether any is in progress, or completed
@@ -19,10 +21,15 @@ pub struct Batch<C, N> {
 }
 
 impl<C, N: NodeIdT> Batch<C, N> {
+    /// Returns the linear epoch of this `DynamicHoneyBadger` batch.
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
 
+    /// Returns the `DynamicHoneyBadger` epoch of the next batch.
+    pub fn next_epoch(&self) -> &Epoch {
+        &self.next_epoch
+    }
     /// Returns whether any change to the set of participating nodes is in progress or was
     /// completed in this epoch.
     pub fn change(&self) -> &ChangeState<N> {

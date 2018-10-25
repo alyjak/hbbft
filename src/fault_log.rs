@@ -20,6 +20,8 @@ pub enum FaultKind {
     InvalidCiphertext,
     /// `HoneyBadger` was unable to decrypt a share received from a proposer.
     ShareDecryptionFailed,
+    /// `HoneyBadger` received a message with an invalid epoch.
+    UnexpectedHbMessageEpoch,
     /// `ThresholdDecryption` received multiple shares from the same sender.
     MultipleDecryptionShares,
     /// `Broadcast` received a `Value` from a node other than the proposer.
@@ -55,6 +57,8 @@ pub enum FaultKind {
     InvalidVoteSignature,
     /// A validator committed an invalid vote in `DynamicHoneyBadger`.
     InvalidCommittedVote,
+    /// `DynamicHoneyBadger` received a message with an invalid era.
+    UnexpectedDhbMessageEra,
     /// `BinaryAgreement` received a duplicate `BVal` message.
     DuplicateBVal,
     /// `BinaryAgreement` received a duplicate `Aux` message.

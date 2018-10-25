@@ -374,7 +374,7 @@ impl<N: NodeIdT + Rand, S: SessionIdT> Subset<N, S> {
             .collect();
 
         if delivered_1.len() == broadcast_results.len() {
-            debug!("{:?} Binary Agreement instances completed:", self.our_id());
+            debug!("{:?} Binary Agreement instances completed", self.our_id());
             self.decided = true;
             Some(SubsetOutput::Done)
         } else {

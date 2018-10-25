@@ -16,18 +16,20 @@ extern crate threshold_crypto as crypto;
 mod network;
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::sync::Arc;
 
 use itertools::Itertools;
 use rand::{Isaac64Rng, Rng};
 
 use hbbft::dynamic_honey_badger::{Batch, Change, ChangeState, DynamicHoneyBadger, Input};
+use hbbft::sender_queue::{SenderQueue, Step};
 use hbbft::transaction_queue::TransactionQueue;
 use hbbft::NetworkInfo;
 
 use network::{Adversary, MessageScheduler, NodeId, SilentAdversary, TestNetwork, TestNode};
 
-type UsizeDhb = DynamicHoneyBadger<Vec<usize>, NodeId>;
+type UsizeDhb = SenderQueue<DynamicHoneyBadger<Vec<usize>, NodeId>>;
 
 /// Proposes `num_txs` values and expects nodes to output and order them.
 fn test_dynamic_honey_badger<A>(mut network: TestNetwork<A, UsizeDhb>, num_txs: usize)
@@ -75,8 +77,8 @@ where
             .iter()
             .filter(|(_, node)| {
                 node_busy(*node)
-                    && !node.instance().has_input()
-                    && node.instance().netinfo().is_validator()
+                    && !node.instance().algo().has_input()
+                    && node.instance().algo().netinfo().is_validator()
                     // Wait until all nodes have completed removing 0, before inputting `Add`.
                     && (input_add || !has_remove(node))
                     // If there's only one node, it will immediately output on input. Make sure we
@@ -94,6 +96,7 @@ where
         if !input_add && network.nodes.values().all(has_remove) {
             let pk = network.nodes[&NodeId(0)]
                 .instance()
+                .algo()
                 .netinfo()
                 .secret_key()
                 .public_key();
@@ -106,8 +109,17 @@ where
 
 // Allow passing `netinfo` by value. `TestNetwork` expects this function signature.
 #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
-fn new_dynamic_hb(netinfo: Arc<NetworkInfo<NodeId>>) -> UsizeDhb {
-    DynamicHoneyBadger::builder().build((*netinfo).clone())
+fn new_dynamic_hb(
+    netinfo: Arc<NetworkInfo<NodeId>>,
+) -> (UsizeDhb, Step<DynamicHoneyBadger<Vec<usize>, NodeId>>) {
+    let observer = NodeId(netinfo.num_nodes());
+    let peer_ids = netinfo
+        .all_ids()
+        .cloned()
+        .chain(iter::once(observer))
+        .collect();
+    SenderQueue::builder(DynamicHoneyBadger::builder().build((*netinfo).clone()))
+        .build(netinfo.our_id().clone(), peer_ids)
 }
 
 fn test_dynamic_honey_badger_different_sizes<A, F>(new_adversary: F, num_txs: usize)
@@ -129,7 +141,8 @@ where
             num_good_nodes, num_adv_nodes
         );
         let adversary = |adv_nodes| new_adversary(num_good_nodes, num_adv_nodes, adv_nodes);
-        let network = TestNetwork::new(num_good_nodes, num_adv_nodes, adversary, new_dynamic_hb);
+        let network =
+            TestNetwork::new_with_step(num_good_nodes, num_adv_nodes, adversary, new_dynamic_hb);
         test_dynamic_honey_badger(network, num_txs);
     }
 }

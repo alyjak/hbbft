@@ -7,8 +7,8 @@ use rand::{Rand, Rng};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::epoch_state::EpochState;
-use super::{Batch, Error, ErrorKind, HoneyBadgerBuilder, Message, MessageContent, Result};
-use {util, Contribution, DistAlgorithm, NetworkInfo, NodeIdT};
+use super::{Batch, Error, ErrorKind, HoneyBadgerBuilder, Message, Result};
+use {util, Contribution, DistAlgorithm, Epoched, Fault, FaultKind, NetworkInfo, NodeIdT};
 
 pub use super::epoch_state::SubsetHandlingStrategy;
 
@@ -29,14 +29,20 @@ pub struct HoneyBadger<C, N: Rand> {
     pub(super) epochs: BTreeMap<u64, EpochState<C, N>>,
     /// The maximum number of `Subset` instances that we run simultaneously.
     pub(super) max_future_epochs: u64,
-    /// Messages for future epochs that couldn't be handled yet.
-    pub(super) incoming_queue: BTreeMap<u64, Vec<(N, MessageContent<N>)>>,
     /// A random number generator used for secret key generation.
     // Boxed to avoid overloading the algorithm's type with more generics.
     #[derivative(Debug(format_with = "util::fmt_rng"))]
     pub(super) rng: Box<dyn Rng + Send + Sync>,
     /// Represents the optimization strategy to use for output of the `Subset` algorithm.
     pub(super) subset_handling_strategy: SubsetHandlingStrategy,
+}
+
+impl<C, N: Rand> Epoched for HoneyBadger<C, N> {
+    type Epoch = u64;
+
+    fn epoch(&self) -> Self::Epoch {
+        self.epoch
+    }
 }
 
 pub type Step<C, N> = ::Step<HoneyBadger<C, N>>;
@@ -111,19 +117,17 @@ where
             return Err(ErrorKind::UnknownSender.into());
         }
         let Message { epoch, content } = message;
-        if epoch > self.epoch + self.max_future_epochs {
-            // Postpone handling this message.
-            self.incoming_queue
-                .entry(epoch)
-                .or_insert_with(Vec::new)
-                .push((sender_id.clone(), content));
-        } else if self.epoch <= epoch {
+        if self.epoch <= epoch && epoch <= self.epoch + self.max_future_epochs {
             let step = self
                 .epoch_state_mut(epoch)?
                 .handle_message_content(sender_id, content)?;
-            return Ok(step.join(self.try_output_batches()?));
-        } // And ignore all messages from past epochs.
-        Ok(Step::default())
+            Ok(step.join(self.try_output_batches()?))
+        } else if epoch > self.epoch + self.max_future_epochs {
+            Ok(Fault::new(sender_id.clone(), FaultKind::UnexpectedHbMessageEpoch).into())
+        } else {
+            // The message is late; discard it.
+            Ok(Step::default())
+        }
     }
 
     /// Returns `true` if input for the current epoch has already been provided.
@@ -140,20 +144,12 @@ where
     }
 
     /// Increments the epoch number and clears any state that is local to the finished epoch.
-    fn update_epoch(&mut self) -> Result<Step<C, N>> {
+    fn update_epoch(&mut self) {
         // Clear the state of the old epoch.
         self.epochs.remove(&self.epoch);
         self.epoch += 1;
         self.has_input = false;
-        let max_epoch = self.epoch + self.max_future_epochs;
-        let mut step = Step::default();
-        if let Some(messages) = self.incoming_queue.remove(&max_epoch) {
-            let epoch_state = self.epoch_state_mut(max_epoch)?;
-            for (sender_id, content) in messages {
-                step.extend(epoch_state.handle_message_content(&sender_id, content)?);
-            }
-        }
-        Ok(step)
+        debug!("Started epoch {:?}", self.epoch);
     }
 
     /// Tries to decrypt contributions from all proposers and output those in a batch.
@@ -167,7 +163,7 @@ where
             // Queue the output and advance the epoch.
             step.output.push(batch);
             step.fault_log.extend(fault_log);
-            step.extend(self.update_epoch()?);
+            self.update_epoch();
         }
         Ok(step)
     }
